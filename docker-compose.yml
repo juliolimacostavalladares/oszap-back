@@ -1,0 +1,58 @@
+services:
+  evolution-api:
+    container_name: evolution_api
+    image: evoapicloud/evolution-api:homolog
+    restart: always
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env.evolution
+    volumes:
+      - evolution_store:/evolution/store
+      - evolution_instances:/evolution/instances
+    networks:
+      - evolution-network
+    depends_on:
+      evolution-db:
+        condition: service_healthy
+      evolution-redis:
+        condition: service_healthy
+
+  evolution-db:
+    image: postgres:15-alpine
+    container_name: evolution-db
+    restart: always
+    environment:
+      POSTGRES_DB: evolution
+      POSTGRES_USER: evolution_user
+      POSTGRES_PASSWORD: evolution_pass
+    volumes:
+      - evolution_db_data:/var/lib/postgresql/data
+    networks:
+      - evolution-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  evolution-redis:
+    image: redis:7-alpine
+    container_name: evolution-redis
+    restart: always
+    networks:
+      - evolution-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  evolution_store:
+  evolution_instances:
+  evolution_db_data:
+
+networks:
+  evolution-network:
+    driver: bridge

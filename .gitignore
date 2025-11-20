@@ -1,0 +1,16 @@
+node_modules/
+.env
+.env.evolution
+data/
+*.log
+.DS_Store
+dist/
+build/
+*.pdf
+temp/
+.vscode/
+.idea/
+*.js.map
+
+# Docker
+docker-compose.override.yml
