@@ -29,9 +29,9 @@ export class GeminiService {
    */
   async processOSMessage(text: string): Promise<GeminiOSData> {
     const prompt = `
-Você é um assistente especializado em processar mensagens sobre ordens de serviço.
+Você é um analista experiente processando solicitações de ordens de serviço. Sua função é extrair informações de forma precisa e organizada.
 
-Analise a seguinte mensagem e extraia as informações em formato JSON:
+Analise a mensagem abaixo e extraia os dados no formato JSON especificado:
 
 {
   "client_name": "nome do cliente",
@@ -40,12 +40,12 @@ Analise a seguinte mensagem e extraia as informações em formato JSON:
   "notes": "observações adicionais"
 }
 
-Regras:
-- Se o cliente não for mencionado, use "Cliente não informado"
-- Se o valor total não for mencionado, retorne null para total_amount
-- Se não houver serviços mencionados, retorne array vazio
-- Retorne APENAS o JSON, sem explicações adicionais
-- Use números decimais para valores (ex: 500.00)
+Diretrizes de extração:
+- Identifique o nome do cliente mencionado na mensagem. Se não houver menção, utilize "Cliente não informado"
+- Liste todos os serviços mencionados de forma clara e objetiva. Se não houver serviços, retorne array vazio
+- Extraia o valor total em formato numérico decimal (ex: 500.00). Se não houver valor, retorne null
+- Capture qualquer observação, prazo ou detalhe adicional relevante no campo notes
+- Responda exclusivamente com o JSON válido, sem marcações ou explicações
 
 Mensagem: ${text}
 `;
@@ -83,22 +83,32 @@ Mensagem: ${text}
    */
   async processQuery(query: string): Promise<GeminiQueryResult> {
     const prompt = `
-Você é um assistente para consultas sobre ordens de serviço.
+Você é um analista especializado em interpretar solicitações relacionadas a ordens de serviço. Identifique a intenção do usuário e os parâmetros necessários.
 
-Analise a mensagem do usuário e produza um JSON com a intenção detectada e parâmetros relevantes.
+Analise a solicitação e retorne um JSON estruturado com o tipo de ação e parâmetros relevantes.
 
-Regras:
-- Campos obrigatórios: "type" e "params".
-- "type" deve ser um destes valores: create_os, list_os, status_os, balance, help.
-- "params.listRange" (opcional) indica o intervalo da listagem: "day", "month" ou "latest".
-- "params.osId" (opcional) deve conter o número inteiro da OS quando o usuário pedir status específico.
-- "params.balancePeriod" (opcional) deve ser "day", "month" ou "overall" para consultas de saldo.
-- Se não houver informações adicionais, retorne "params": {}.
-- Responda **somente** com o JSON válido, sem \`\`\`json ou outros delimitadores.
+Estrutura esperada:
+- "type": tipo da ação solicitada
+- "params": parâmetros específicos da ação
 
-Mensagem: ${query}
+Tipos de ação disponíveis:
+- create_os: criar nova ordem de serviço
+- list_os: listar ordens de serviço existentes
+- status_os: consultar status de ordem específica
+- balance: consultar saldos e totalizações
+- help: solicitar orientações de uso
 
-Exemplo de resposta:
+Parâmetros opcionais:
+- "listRange": escopo da listagem ("day" para hoje, "month" para mês atual, "latest" para últimas)
+- "osId": número da ordem de serviço específica
+- "balancePeriod": período do saldo ("day", "month" ou "overall")
+
+Se não houver parâmetros adicionais, retorne "params" como objeto vazio.
+Responda apenas com o JSON válido, sem marcações de código.
+
+Solicitação: ${query}
+
+Exemplo:
 {
   "type": "list_os",
   "params": {
@@ -257,16 +267,25 @@ Exemplo de resposta:
   }
 
   /**
-   * Gera resposta amigável para o usuário
+   * Gera resposta profissional e natural para o usuário
    */
   async generateResponse(context: string, data: any): Promise<string> {
     const prompt = `
-Você é um assistente amigável para gerenciamento de ordens de serviço.
+Você responde mensagens via WhatsApp Business sobre ordens de serviço.
 
-Contexto: ${context}
+REGRAS IMPORTANTES:
+- Seja BREVE e DIRETO. Máximo 2-3 linhas curtas
+- Use linguagem natural de WhatsApp, sem formalidades excessivas
+- NUNCA use markdown, asteriscos ou formatação especial
+- Use apenas quebras de linha simples quando necessário
+- Seja profissional mas casual, como uma pessoa real
+- Evite emojis ou use no máximo 1
+
+${context}
+
 Dados: ${JSON.stringify(data)}
 
-Gere uma resposta amigável e clara em português brasileiro, sem formatação markdown.
+Responda de forma curta e natural.
 `;
 
     try {

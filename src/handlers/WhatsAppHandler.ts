@@ -125,7 +125,7 @@ export class WhatsAppHandler {
       }
     } catch (error) {
       console.error('Erro ao processar mensagem do usuário:', error);
-      await this.sendMessage(from, 'Desculpe, ocorreu um erro ao processar sua mensagem. Tente novamente.');
+      await this.sendMessage(from, 'Ops, algo deu errado. Tenta de novo?');
     }
   }
 
@@ -135,7 +135,7 @@ export class WhatsAppHandler {
   private async handleCreateOS(from: string, text: string): Promise<void> {
     try {
       console.log('HandleCreateOS iniciado. Texto recebido:', text);
-      await this.sendMessage(from, 'Processando sua ordem de serviço...');
+      await this.sendMessage(from, 'Ok, só um momento...');
 
       // Extrair informações com Gemini
       console.log('Chamando GeminiService.processOSMessage para extrair dados estruturados...');
@@ -145,10 +145,10 @@ export class WhatsAppHandler {
       if (!osData || !osData.total_amount) {
         await this.sendMessage(
           from, 
-          'Não consegui identificar todas as informações necessárias. Por favor, inclua:\n' +
-          '- Nome do cliente\n' +
-          '- Serviços realizados\n' +
-          '- Valor total'
+          'Preciso de mais informações:\n\n' +
+          '• Nome do cliente\n' +
+          '• Serviços realizados\n' +
+          '• Valor total'
         );
         return;
       }
@@ -167,21 +167,16 @@ export class WhatsAppHandler {
       console.log('PDF gerado em:', pdfPath);
 
       // Enviar confirmação
+      const valorFormatado = parseFloat(os.total_amount.toString()).toFixed(2).replace('.', ',');
       await this.respondWithAI(
         from,
-        'Informe ao usuário que a ordem de serviço foi criada com sucesso e mencione cliente, serviços principais e valor.',
+        'Confirme brevemente que a OS foi criada. Mencione apenas número, cliente e valor.',
         {
           client: os.client_name,
           total: os.total_amount,
-          status: os.status,
-          servicesPreview: os.services?.slice(0, 3) || [],
           osId: os.id
         },
-        `✅ Ordem de Serviço #${os.id} criada com sucesso!\nCliente: ${os.client_name}\nTotal: R$ ${parseFloat(
-          os.total_amount.toString()
-        )
-          .toFixed(2)
-          .replace('.', ',')}\nStatus: ${os.status}`
+        `OS #${os.id} criada\n${os.client_name} - R$ ${valorFormatado}\n\nEnviando PDF...`
       );
 
       // Enviar PDF
@@ -200,7 +195,7 @@ export class WhatsAppHandler {
 
     } catch (error) {
       console.error('Erro ao criar OS:', error);
-      await this.sendMessage(from, 'Erro ao criar ordem de serviço. Tente novamente.');
+      await this.sendMessage(from, 'Ops, algo deu errado. Tenta de novo?');
     }
   }
 
@@ -216,17 +211,17 @@ export class WhatsAppHandler {
       switch (scope) {
         case 'day':
           osList = await this.orderServiceService.listOSByDay();
-          message = '📋 Ordens de Serviço do Dia:\n\n';
+          message = '*OS de hoje:*\n\n';
           console.log('Listando OS do dia conforme instrução da IA');
           break;
         case 'month':
           osList = await this.orderServiceService.listOSByMonth();
-          message = '📋 Ordens de Serviço do Mês:\n\n';
+          message = '*OS do mês:*\n\n';
           console.log('Listando OS do mês conforme instrução da IA');
           break;
         default:
           osList = await this.orderServiceService.listOS({ limit: 10 });
-          message = '📋 Últimas Ordens de Serviço:\n\n';
+          message = '*Últimas OS:*\n\n';
           console.log('Listando últimas OS (escopo padrão)');
           break;
       }
@@ -234,33 +229,21 @@ export class WhatsAppHandler {
       console.log('Quantidade de OS retornadas:', osList.length);
 
       if (osList.length === 0) {
-        await this.sendMessage(from, 'Nenhuma ordem de serviço encontrada.');
+        await this.sendMessage(from, 'Nenhuma OS encontrada.');
         return;
       }
 
       osList.forEach((os: OrderService) => {
-        const services = os.services;
-        const servicesText = services.length > 0 
-          ? services.slice(0, 2).join(', ') + (services.length > 2 ? '...' : '')
-          : 'Nenhum serviço especificado';
-
+        const valor = parseFloat(os.total_amount.toString()).toFixed(2).replace('.', ',');
         message += `#${os.id} - ${os.client_name}\n`;
-        message += `Serviços: ${servicesText}\n`;
-        message += `Total: R$ ${parseFloat(os.total_amount.toString()).toFixed(2).replace('.', ',')}\n`;
-        message += `Status: ${os.status}\n`;
-        message += `Data: ${new Date(os.created_at).toLocaleDateString('pt-BR')}\n\n`;
+        message += `R$ ${valor} • ${os.status}\n\n`;
       });
 
-      await this.respondWithAI(
-        from,
-        'Resuma de forma amigável a lista de ordens de serviço solicitada pelo usuário.',
-        { scope, osList },
-        message
-      );
+      await this.sendMessage(from, message.trim());
 
     } catch (error) {
       console.error('Erro ao listar OSs:', error);
-      await this.sendMessage(from, 'Erro ao consultar ordens de serviço.');
+      await this.sendMessage(from, 'Erro ao buscar OS. Tenta de novo?');
     }
   }
 
@@ -282,43 +265,48 @@ export class WhatsAppHandler {
       }
 
       if (!osId) {
-        await this.sendMessage(from, 'Não consegui identificar o número da OS. Por favor, informe algo como "Status da OS #123".');
+        await this.sendMessage(from, 'Me envia o número da OS.\nEx: OS 123 ou #123');
         return;
       }
 
       const os = await this.orderServiceService.getOSById(osId);
 
       if (!os) {
-        await this.sendMessage(from, `Ordem de Serviço #${osId} não encontrada.`);
+        await this.sendMessage(from, `OS #${osId} não encontrada.`);
         return;
       }
 
       const services = os.services;
 
-      let message = `📄 Ordem de Serviço #${os.id}\n\n`;
+      const valor = parseFloat(os.total_amount.toString()).toFixed(2).replace('.', ',');
+      const data = new Date(os.created_at).toLocaleDateString('pt-BR');
+      
+      let message = `*OS #${os.id}*\n\n`;
       message += `Cliente: ${os.client_name}\n`;
       message += `Status: ${os.status}\n`;
-      message += `Data: ${new Date(os.created_at).toLocaleDateString('pt-BR')}\n\n`;
-      message += `Serviços:\n`;
-      services.forEach((service: string, index: number) => {
-        message += `${index + 1}. ${service}\n`;
-      });
-      message += `\nTotal: R$ ${parseFloat(os.total_amount.toString()).toFixed(2).replace('.', ',')}\n`;
+      message += `Data: ${data}\n\n`;
+      
+      if (services.length > 0) {
+        message += `Serviços:\n`;
+        services.slice(0, 3).forEach((service: string) => {
+          message += `• ${service}\n`;
+        });
+        if (services.length > 3) {
+          message += `• +${services.length - 3} mais...\n`;
+        }
+      }
+      
+      message += `\nTotal: R$ ${valor}`;
 
       if (os.notes) {
-        message += `\nObservações: ${os.notes}\n`;
+        message += `\n\nObs: ${os.notes}`;
       }
 
-      await this.respondWithAI(
-        from,
-        'Explique ao usuário o status atual da ordem de serviço solicitada.',
-        { os },
-        message
-      );
+      await this.sendMessage(from, message);
 
     } catch (error) {
       console.error('Erro ao verificar status:', error);
-      await this.sendMessage(from, 'Erro ao consultar status da OS.');
+      await this.sendMessage(from, 'Erro ao consultar OS. Tenta de novo?');
     }
   }
 
@@ -338,38 +326,34 @@ export class WhatsAppHandler {
           const list = await this.orderServiceService.listOSByDay();
           total = await this.orderServiceService.getDayBalance();
           osCount = list.length;
-          title = '💰 Saldo do Dia';
+          title = '*Hoje*';
           break;
         }
         case 'month': {
           const list = await this.orderServiceService.listOSByMonth();
           total = await this.orderServiceService.getMonthBalance();
           osCount = list.length;
-          title = '💰 Saldo do Mês';
+          title = '*Este mês*';
           break;
         }
         default: {
           const list = await this.orderServiceService.listOS({ limit: 100 });
           total = list.reduce((acc, os) => acc + Number(os.total_amount ?? 0), 0);
           osCount = list.length;
-          title = '💰 Saldo Geral';
+          title = '*Saldo total*';
           break;
         }
       }
 
-      let message = `${title}\n\n`;
-      message += `Total: R$ ${total.toFixed(2).replace('.', ',')}\n`;
-      message += `Quantidade de OSs: ${osCount}\n`;
+      const valorFormatado = total.toFixed(2).replace('.', ',');
+      let message = `${title}\n`;
+      message += `R$ ${valorFormatado}\n`;
+      message += `${osCount} OS`;
 
-      await this.respondWithAI(
-        from,
-        'Compartilhe o saldo solicitado pelo usuário de forma amigável.',
-        { period, total, osCount },
-        message
-      );
+      await this.sendMessage(from, message);
     } catch (error) {
       console.error('Erro ao consultar saldo:', error);
-      await this.sendMessage(from, 'Erro ao consultar saldo.');
+      await this.sendMessage(from, 'Erro ao consultar saldo. Tenta de novo?');
     }
   }
 
@@ -377,12 +361,14 @@ export class WhatsAppHandler {
    * Mostra ajuda
    */
   private async handleHelp(from: string): Promise<void> {
-    await this.respondWithAI(
-      from,
-      'Explique de forma amigável como o usuário pode interagir com o assistente para criar ou consultar ordens de serviço.',
-      {},
-      'Posso criar novas OS, listar as existentes, informar status e saldos. Conte-me o que precisa!'
-    );
+    const message = 'Posso te ajudar com:\n\n' +
+      '• Criar OS (me envia os dados)\n' +
+      '• Listar OS (hoje, mês ou últimas)\n' +
+      '• Ver status de OS específica\n' +
+      '• Consultar saldo\n\n' +
+      'O que precisa?';
+    
+    await this.sendMessage(from, message);
   }
 
   /**
@@ -433,20 +419,20 @@ export class WhatsAppHandler {
 
   private async handleAudioMessage(from: string, audioMessage: any, originalMessage: EvolutionMessage): Promise<void> {
     try {
-      await this.sendMessage(from, 'Processando áudio... Por favor, aguarde.');
+      await this.sendMessage(from, 'Processando áudio...');
 
       const mediaResponse = await this.evolutionService.downloadMedia(audioMessage, originalMessage?.key?.id || '');
       const { base64Data, mimeType } = this.extractAudioData(mediaResponse, audioMessage?.mimetype);
 
       if (!base64Data) {
-        await this.sendMessage(from, 'Não consegui baixar seu áudio. Por favor, envie em texto.');
+        await this.sendMessage(from, 'Não consegui processar o áudio. Pode enviar em texto?');
         return;
       }
 
       const transcription = await this.geminiService.transcribeAudio(base64Data, mimeType || 'audio/ogg');
 
       if (!transcription || transcription.trim().length === 0) {
-        await this.sendMessage(from, 'Não consegui transcrever seu áudio. Por favor, envie em texto.');
+        await this.sendMessage(from, 'Não entendi o áudio. Pode enviar em texto?');
         return;
       }
 
@@ -454,7 +440,7 @@ export class WhatsAppHandler {
       await this.processUserMessage(from, transcription);
     } catch (error) {
       console.error('Erro ao processar áudio:', error);
-      await this.sendMessage(from, 'Não consegui processar seu áudio. Por favor, tente novamente em texto.');
+      await this.sendMessage(from, 'Erro ao processar áudio. Envia em texto?');
     }
   }
 
