@@ -1,527 +1,443 @@
-import { Buffer } from 'buffer';
-import EvolutionService from '../services/EvolutionService.js';
-import GeminiService from '../services/GeminiService.js';
-import { OrderServiceService } from '../services/OrderServiceService.js';
-import PDFService from '../services/PDFService.js';
-import type {
-  EvolutionMessage,
-  OrderService,
-  GeminiBalancePeriod,
-  GeminiListRange
-} from '../types/index.js';
+import { AssistantOrchestrator } from '../services/AssistantOrchestrator.js';
+import { EvolutionService } from '../services/EvolutionService.js';
+import axios from 'axios';
 
 /**
- * Handler para processar mensagens do WhatsApp
- * Responsável por interpretar mensagens e executar ações apropriadas
+ * Handler Principal do WhatsApp
+ * Processa mensagens e interage com o assistente IA
  */
 export class WhatsAppHandler {
-  constructor(
-    private evolutionService: typeof EvolutionService,
-    private geminiService: typeof GeminiService,
-    private orderServiceService: OrderServiceService,
-    private pdfService: typeof PDFService
-  ) {}
+  private orchestrator: AssistantOrchestrator;
+  private evolutionService: EvolutionService;
 
-  private conversationHistory: Map<string, { lastUserMessage?: string; lastBotMessage?: string }> = new Map();
+  constructor() {
+    this.orchestrator = new AssistantOrchestrator();
+    this.evolutionService = new EvolutionService();
+  }
 
   /**
    * Processa mensagem recebida do WhatsApp
    */
-  async handleMessage(message: EvolutionMessage): Promise<void> {
+  async handleMessage(data: any): Promise<void> {
     try {
-      console.log('Mensagem recebida:', JSON.stringify(message, null, 2));
+      const { key, pushName, message, messageType } = data;
       
-      const { key, message: msgData } = message;
-      const from = key.remoteJid?.replace('@s.whatsapp.net', '') || key.participant?.replace('@s.whatsapp.net', '');
-      
-      console.log('Remetente extraído:', from);
-      console.log('Flag fromMe:', key.fromMe, 'Tipo de dados disponíveis:', msgData ? Object.keys(msgData) : 'sem mensagem');
-      
-      if (!from) {
-        console.log('Mensagem sem remetente válido');
-        return;
-      }
-
-      // // Ignorar mensagens próprias
+      // TEMPORÁRIO: Comentado para testes - descomentar em produção!
+      // Em produção, deve ignorar mensagens próprias para evitar loops
       // if (key.fromMe) {
-      //   console.log('Ignorando mensagem própria para evitar loops');
+      //   console.log('[WhatsAppHandler] Mensagem própria ignorada');
       //   return;
       // }
 
-      let text = '';
-      let detectedMessageType = 'desconhecido';
+      // Extrai informações
+      const remoteJid = key.remoteJid;
+      const messageId = key.id;
+      const userName = pushName;
+      const userPhone = this.extractPhoneNumber(remoteJid);
 
-      // Processar diferentes tipos de mensagem
-      if (msgData?.conversation) {
-        // Mensagem de texto simples
-        text = msgData.conversation;
-        detectedMessageType = 'conversation';
-      } else if (msgData?.extendedTextMessage?.text) {
-        // Mensagem de texto estendida
-        text = msgData.extendedTextMessage.text;
-        detectedMessageType = 'extendedTextMessage';
-      } else if (msgData?.audioMessage) {
-        detectedMessageType = 'audioMessage';
-        await this.handleAudioMessage(from, msgData.audioMessage, message);
-        return;
-      } else {
-        console.log('Tipo de mensagem não suportado:', Object.keys(msgData || {}));
-        return;
+      // 📱 WHATSAPP BUSINESS: Aceita mensagens de QUALQUER cliente
+      // Todos os clientes podem conversar com o assistente automaticamente
+      console.log(`[WhatsAppHandler] 📨 Nova mensagem de ${userName} (${userPhone})`);
+      console.log(`[WhatsAppHandler] Tipo: ${messageType}`);
+
+      // Envia indicador de "digitando..."
+      await this.sendTypingIndicator(remoteJid, true);
+
+      let response: any;
+
+      try {
+        // Processa baseado no tipo de mensagem
+        switch (messageType) {
+          case 'conversation':
+          case 'extendedTextMessage':
+            response = await this.handleTextMessage(
+              message.conversation || message.extendedTextMessage?.text || '',
+              userPhone,
+              remoteJid,
+              userName
+            );
+            break;
+
+          case 'audioMessage':
+            response = await this.handleAudioMessage(
+              message,
+              userPhone,
+              remoteJid,
+              userName
+            );
+            break;
+
+          case 'imageMessage':
+            response = await this.handleImageMessage(
+              message.imageMessage,
+              userPhone,
+              remoteJid,
+              userName
+            );
+            break;
+
+          case 'documentMessage':
+            response = await this.handleDocumentMessage(
+              message.documentMessage,
+              userPhone,
+              remoteJid,
+              userName
+            );
+            break;
+
+          case 'buttonsResponseMessage':
+          case 'listResponseMessage':
+            response = await this.handleInteractiveResponse(
+              message,
+              messageType,
+              userPhone,
+              remoteJid,
+              userName
+            );
+            break;
+
+          default:
+            console.log(`[WhatsAppHandler] Tipo de mensagem não suportado: ${messageType}`);
+            response = {
+              response: '😔 Desculpe, não consigo processar este tipo de mensagem ainda.\n\nPor favor, envie uma mensagem de texto ou áudio.'
+            };
+        }
+
+        // Para de "digitar"
+        await this.sendTypingIndicator(remoteJid, false);
+
+        // Envia resposta
+        await this.sendResponse(remoteJid, response);
+
+      } catch (error) {
+        // Para de "digitar" em caso de erro
+        await this.sendTypingIndicator(remoteJid, false);
+        throw error;
       }
 
-      console.log(`Conteúdo textual detectado (${detectedMessageType}):`, text);
-      this.saveUserMessage(from, text);
-      if (!text || text.trim().length === 0) {
-        return;
-      }
-
-      // Processar mensagem do usuário
-      console.log('Encaminhando texto para processamento do agente');
-      await this.processUserMessage(from, text);
-
-    } catch (error) {
-      console.error('Erro ao processar mensagem:', error);
+    } catch (error: any) {
+      console.error('[WhatsAppHandler] Erro ao processar mensagem:', error);
     }
   }
 
   /**
-   * Processa mensagem do usuário
+   * Processa mensagem de texto
    */
-  private async processUserMessage(from: string, text: string): Promise<void> {
-    try {
-      // Identificar tipo de consulta com Gemini
-      console.log('Consultando GeminiService.processQuery com o texto recebido...');
-      const queryResult = await this.geminiService.processQuery(text);
-      const queryType = queryResult.type;
-      const queryParams = queryResult.params || {};
-      console.log('Intenção identificada pelo Gemini:', queryType, 'Parâmetros:', queryParams);
-
-      switch (queryType) {
-        case 'create_os':
-          console.log('Fluxo selecionado: criar OS');
-          await this.handleCreateOS(from, text);
-          break;
-        
-        case 'list_os':
-          console.log('Fluxo selecionado: listar OS');
-          await this.handleListOS(from, this.normalizeListRange(queryParams.listRange), text);
-          break;
-        
-        case 'status_os':
-          console.log('Fluxo selecionado: status de OS');
-          await this.handleStatusOS(from, text, queryParams.osId);
-          break;
-
-        case 'balance':
-          console.log('Fluxo selecionado: saldo');
-          await this.handleBalance(from, this.normalizeBalancePeriod(queryParams.balancePeriod));
-          break;
-        
-        case 'help':
-        default:
-          console.log('Fluxo selecionado: ajuda (default)');
-          await this.handleHelp(from);
-          break;
-      }
-    } catch (error) {
-      console.error('Erro ao processar mensagem do usuário:', error);
-      await this.sendMessage(from, 'Ops, algo deu errado. Tenta de novo?');
-    }
+  private async handleTextMessage(
+    text: string,
+    userPhone: string,
+    remoteJid: string,
+    userName?: string
+  ): Promise<any> {
+    return await this.orchestrator.processUserMessage(
+      text,
+      userPhone,
+      remoteJid,
+      userName
+    );
   }
 
   /**
-   * Cria uma nova OS
+   * Processa mensagem de áudio
    */
-  private async handleCreateOS(from: string, text: string): Promise<void> {
+  private async handleAudioMessage(
+    message: any,
+    userPhone: string,
+    remoteJid: string,
+    userName?: string
+  ): Promise<any> {
     try {
-      console.log('HandleCreateOS iniciado. Texto recebido:', text);
-      await this.sendMessage(from, 'Ok, só um momento...');
+      console.log('[WhatsAppHandler] Processando áudio...');
 
-      // Extrair informações com Gemini
-      console.log('Chamando GeminiService.processOSMessage para extrair dados estruturados...');
-      const osData = await this.geminiService.processOSMessage(text);
-      console.log('Dados estruturados retornados:', osData);
-
-      if (!osData || !osData.total_amount) {
-        await this.sendMessage(
-          from, 
-          'Preciso de mais informações:\n\n' +
-          '• Nome do cliente\n' +
-          '• Serviços realizados\n' +
-          '• Valor total'
+      // Verifica se o WhatsApp já enviou a transcrição
+      // A transcrição vem em message.speechToText, não em message.audioMessage.speechToText
+      const speechToText = message.speechToText || message.text;
+      
+      if (speechToText) {
+        console.log('[WhatsAppHandler] ✅ Usando transcrição do WhatsApp:', speechToText);
+        
+        // Processa a transcrição direto como texto
+        return await this.orchestrator.processUserMessage(
+          speechToText,
+          userPhone,
+          remoteJid,
+          userName
         );
-        return;
       }
 
-      // Criar OS e gerar PDF
-      console.log('Chamando OrderServiceService.createOS com os dados interpretados');
-      const { os, pdfPath } = await this.orderServiceService.createOS({
-        client_name: osData.client_name,
-        client_phone: from,
-        services: osData.services || [],
-        total_amount: osData.total_amount,
-        notes: osData.notes,
-        status: 'pendente'
-      });
-      console.log('OS criada com sucesso:', os);
-      console.log('PDF gerado em:', pdfPath);
+      // Se não tem transcrição, processa o áudio
+      const audioMessage = message.audioMessage;
+      const mimeType = audioMessage.mimetype || 'audio/ogg; codecs=opus';
+      let audioBuffer: Buffer;
 
-      // Enviar confirmação
-      const valorFormatado = parseFloat(os.total_amount.toString()).toFixed(2).replace('.', ',');
-      await this.respondWithAI(
-        from,
-        'Confirme brevemente que a OS foi criada. Mencione apenas número, cliente e valor.',
-        {
-          client: os.client_name,
-          total: os.total_amount,
-          osId: os.id
-        },
-        `OS #${os.id} criada\n${os.client_name} - R$ ${valorFormatado}\n\nEnviando PDF...`
+      // Prioriza usar o base64 se estiver disponível (mais eficiente)
+      if (audioMessage.base64) {
+        console.log('[WhatsAppHandler] 📦 Usando áudio em base64 da mensagem');
+        audioBuffer = Buffer.from(audioMessage.base64, 'base64');
+      } else if (message.message?.audioMessage?.base64) {
+        console.log('[WhatsAppHandler] 📦 Usando áudio em base64 de message.message');
+        audioBuffer = Buffer.from(message.message.audioMessage.base64, 'base64');
+      } else if (audioMessage.url) {
+        // Fallback: baixa da URL se não tiver base64
+        console.log('[WhatsAppHandler] 🌐 Baixando áudio da URL...');
+        const audioResponse = await axios.get(audioMessage.url, { responseType: 'arraybuffer' });
+        audioBuffer = Buffer.from(audioResponse.data);
+      } else {
+        throw new Error('Áudio não encontrado (sem base64 nem URL)');
+      }
+
+      console.log(`[WhatsAppHandler] 🎤 Áudio carregado: ${audioBuffer.length} bytes`);
+
+      // Processa o áudio (será convertido de OGG/Opus para MP3)
+      return await this.orchestrator.processAudio(
+        audioBuffer,
+        mimeType,
+        userPhone,
+        remoteJid,
+        userName
       );
 
-      // Enviar PDF
-      console.log('Enviando PDF via EvolutionService.sendFile...');
-      await this.evolutionService.sendFile(
-        from,
-        pdfPath,
-        `Ordem de Serviço #${os.id} - ${os.client_name}`
-      );
-
-      // Limpar PDF temporário após alguns segundos
-      setTimeout(() => {
-        console.log('Removendo PDF temporário:', pdfPath);
-        this.pdfService.deletePDF(pdfPath).catch(console.error);
-      }, 60000); // 1 minuto
-
-    } catch (error) {
-      console.error('Erro ao criar OS:', error);
-      await this.sendMessage(from, 'Ops, algo deu errado. Tenta de novo?');
+    } catch (error: any) {
+      console.error('[WhatsAppHandler] Erro ao processar áudio:', error);
+      return {
+        response: '😔 Não consegui processar o áudio. Por favor, tente novamente ou envie uma mensagem de texto.'
+      };
     }
   }
 
   /**
-   * Lista OSs
+   * Processa mensagem de imagem
    */
-  private async handleListOS(from: string, scope: GeminiListRange = 'latest', originalText?: string): Promise<void> {
+  private async handleImageMessage(
+    imageMessage: any,
+    userPhone: string,
+    remoteJid: string,
+    userName?: string
+  ): Promise<any> {
     try {
-      let osList;
-      let message = '';
+      const caption = imageMessage.caption || 'Analise esta imagem';
+      
+      // TODO: Implementar análise de imagem com Vision API
+      // Por enquanto, responde que está em desenvolvimento
 
-      console.log('HandleListOS iniciado. Escopo recebido:', scope, 'Texto original:', originalText);
-      switch (scope) {
-        case 'day':
-          osList = await this.orderServiceService.listOSByDay();
-          message = '*OS de hoje:*\n\n';
-          console.log('Listando OS do dia conforme instrução da IA');
-          break;
-        case 'month':
-          osList = await this.orderServiceService.listOSByMonth();
-          message = '*OS do mês:*\n\n';
-          console.log('Listando OS do mês conforme instrução da IA');
-          break;
-        default:
-          osList = await this.orderServiceService.listOS({ limit: 10 });
-          message = '*Últimas OS:*\n\n';
-          console.log('Listando últimas OS (escopo padrão)');
-          break;
-      }
+      return {
+        response: '📸 Recebi sua imagem!\n\nPor enquanto, só consigo processar mensagens de texto e áudio. A análise de imagens será implementada em breve.'
+      };
 
-      console.log('Quantidade de OS retornadas:', osList.length);
-
-      if (osList.length === 0) {
-        await this.sendMessage(from, 'Nenhuma OS encontrada.');
-        return;
-      }
-
-      osList.forEach((os: OrderService) => {
-        const valor = parseFloat(os.total_amount.toString()).toFixed(2).replace('.', ',');
-        message += `#${os.id} - ${os.client_name}\n`;
-        message += `R$ ${valor} • ${os.status}\n\n`;
-      });
-
-      await this.sendMessage(from, message.trim());
-
-    } catch (error) {
-      console.error('Erro ao listar OSs:', error);
-      await this.sendMessage(from, 'Erro ao buscar OS. Tenta de novo?');
+    } catch (error: any) {
+      console.error('[WhatsAppHandler] Erro ao processar imagem:', error);
+      return {
+        response: '😔 Não consegui processar a imagem. Por favor, tente descrever em texto o que precisa.'
+      };
     }
   }
 
   /**
-   * Verifica status de uma OS específica
+   * Processa mensagem de documento
    */
-  private async handleStatusOS(from: string, text: string, osIdFromAI?: number): Promise<void> {
+  private async handleDocumentMessage(
+    documentMessage: any,
+    userPhone: string,
+    remoteJid: string,
+    userName?: string
+  ): Promise<any> {
+    return {
+      response: '📄 Recebi seu documento!\n\nPor enquanto, só consigo processar mensagens de texto e áudio. O processamento de documentos será implementado em breve.'
+    };
+  }
+
+  /**
+   * Processa respostas interativas (botões e listas)
+   */
+  private async handleInteractiveResponse(
+    message: any,
+    messageType: string,
+    userPhone: string,
+    remoteJid: string,
+    userName?: string
+  ): Promise<any> {
     try {
-      console.log('HandleStatusOS iniciado. Texto recebido:', text, 'osId sugerido pela IA:', osIdFromAI);
-      let osId = osIdFromAI;
+      let selectedId: string;
+      let selectedTitle: string;
 
-      if (!osId) {
-        // Fallback: tentar extrair número da mensagem manualmente
-        const osIdMatch = text.match(/#?(\d+)/);
-        if (osIdMatch) {
-          osId = parseInt(osIdMatch[1]);
-          console.log('ID inferido por fallback:', osId);
-        }
+      if (messageType === 'buttonsResponseMessage') {
+        selectedId = message.buttonsResponseMessage.selectedButtonId;
+        selectedTitle = message.buttonsResponseMessage.selectedDisplayText;
+      } else if (messageType === 'listResponseMessage') {
+        selectedId = message.listResponseMessage.singleSelectReply.selectedRowId;
+        selectedTitle = message.listResponseMessage.title;
+      } else {
+        throw new Error('Tipo de resposta interativa não suportado');
       }
 
-      if (!osId) {
-        await this.sendMessage(from, 'Me envia o número da OS.\nEx: OS 123 ou #123');
+      console.log(`[WhatsAppHandler] Resposta interativa: ${selectedId} (${selectedTitle})`);
+
+      // Processa a seleção como texto
+      const text = selectedTitle || selectedId;
+      return await this.handleTextMessage(text, userPhone, remoteJid, userName);
+
+    } catch (error: any) {
+      console.error('[WhatsAppHandler] Erro ao processar resposta interativa:', error);
+      return {
+        response: '😔 Não consegui processar sua seleção. Por favor, tente novamente.'
+      };
+    }
+  }
+
+  /**
+   * Envia resposta para o usuário
+   */
+  private async sendResponse(remoteJid: string, response: any): Promise<void> {
+    try {
+      // Se tem mídia (PDF, imagem, etc)
+      if (response.mediaUrl) {
+        await this.sendMediaMessage(remoteJid, response);
+      }
+
+      // Se tem botões
+      if (response.buttons) {
+        await this.sendButtonMessage(remoteJid, response);
         return;
       }
 
-      const os = await this.orderServiceService.getOSById(osId);
-
-      if (!os) {
-        await this.sendMessage(from, `OS #${osId} não encontrada.`);
+      // Se tem lista
+      if (response.list) {
+        await this.sendListMessage(remoteJid, response);
         return;
       }
 
-      const services = os.services;
+      // Mensagem de texto simples
+      if (response.response) {
+        await this.sendTextMessage(remoteJid, response.response);
+      }
 
-      const valor = parseFloat(os.total_amount.toString()).toFixed(2).replace('.', ',');
-      const data = new Date(os.created_at).toLocaleDateString('pt-BR');
+    } catch (error: any) {
+      console.error('[WhatsAppHandler] Erro ao enviar resposta:', error);
       
-      let message = `*OS #${os.id}*\n\n`;
-      message += `Cliente: ${os.client_name}\n`;
-      message += `Status: ${os.status}\n`;
-      message += `Data: ${data}\n\n`;
-      
-      if (services.length > 0) {
-        message += `Serviços:\n`;
-        services.slice(0, 3).forEach((service: string) => {
-          message += `• ${service}\n`;
+      // Tenta enviar mensagem de erro simples
+      try {
+        await this.sendTextMessage(
+          remoteJid,
+          '😔 Desculpe, ocorreu um erro ao enviar a resposta. Por favor, tente novamente.'
+        );
+      } catch (fallbackError) {
+        console.error('[WhatsAppHandler] Erro ao enviar mensagem de fallback:', fallbackError);
+      }
+    }
+  }
+
+  /**
+   * Envia mensagem de texto simples
+   */
+  private async sendTextMessage(remoteJid: string, text: string): Promise<void> {
+    // ✅ Permite envio para qualquer número (quando solicitado pelo usuário autorizado)
+    await this.evolutionService.sendTextMessage(remoteJid, text);
+    console.log('[WhatsAppHandler] Mensagem de texto enviada');
+  }
+
+  /**
+   * Envia mensagem com botões
+   */
+  private async sendButtonMessage(remoteJid: string, data: any): Promise<void> {
+    // ✅ Permite envio para qualquer número (quando solicitado pelo usuário autorizado)
+    // TODO: Implementar envio de botões quando Evolution API suportar
+    // Por enquanto, envia como texto
+    await this.sendTextMessage(remoteJid, data.response);
+    console.log('[WhatsAppHandler] Botões ainda não suportados, enviado como texto');
+  }
+
+  /**
+   * Envia mensagem com lista
+   */
+  private async sendListMessage(remoteJid: string, data: any): Promise<void> {
+    // ✅ Permite envio para qualquer número (quando solicitado pelo usuário autorizado)
+    // TODO: Implementar envio de listas quando Evolution API suportar
+    // Por enquanto, envia como texto
+    await this.sendTextMessage(remoteJid, data.response);
+    console.log('[WhatsAppHandler] Listas ainda não suportadas, enviado como texto');
+  }
+
+  /**
+   * Envia mensagem com mídia (PDF, imagem, etc)
+   */
+  private async sendMediaMessage(remoteJid: string, data: any): Promise<void> {
+    // ✅ Permite envio para qualquer número (quando solicitado pelo usuário autorizado)
+    try {
+      if (data.mediaType === 'document') {
+        // Envia documento/PDF
+        await this.evolutionService.sendMedia({
+          number: remoteJid,
+          mediatype: 'document',
+          media: data.mediaUrl,
+          fileName: data.fileName || 'documento.pdf',
+          caption: data.response || ''
         });
-        if (services.length > 3) {
-          message += `• +${services.length - 3} mais...\n`;
-        }
+        console.log('[WhatsAppHandler] Documento enviado');
+      } else if (data.mediaType === 'image') {
+        // Envia imagem
+        await this.evolutionService.sendMedia({
+          number: remoteJid,
+          mediatype: 'image',
+          media: data.mediaUrl,
+          caption: data.response || ''
+        });
+        console.log('[WhatsAppHandler] Imagem enviada');
       }
-      
-      message += `\nTotal: R$ ${valor}`;
-
-      if (os.notes) {
-        message += `\n\nObs: ${os.notes}`;
+    } catch (error: any) {
+      console.error('[WhatsAppHandler] Erro ao enviar mídia:', error);
+      // Fallback: envia só o texto
+      if (data.response) {
+        await this.sendTextMessage(remoteJid, data.response);
       }
-
-      await this.sendMessage(from, message);
-
-    } catch (error) {
-      console.error('Erro ao verificar status:', error);
-      await this.sendMessage(from, 'Erro ao consultar OS. Tenta de novo?');
     }
   }
 
   /**
-   * Mostra saldo
+   * Envia indicador de digitação
    */
-  private async handleBalance(from: string, period: GeminiBalancePeriod = 'overall'): Promise<void> {
-    try {
-      console.log('HandleBalance iniciado. Período recebido:', period);
-
-      let title = '';
-      let total = 0;
-      let osCount = 0;
-
-      switch (period) {
-        case 'day': {
-          const list = await this.orderServiceService.listOSByDay();
-          total = await this.orderServiceService.getDayBalance();
-          osCount = list.length;
-          title = '*Hoje*';
-          break;
-        }
-        case 'month': {
-          const list = await this.orderServiceService.listOSByMonth();
-          total = await this.orderServiceService.getMonthBalance();
-          osCount = list.length;
-          title = '*Este mês*';
-          break;
-        }
-        default: {
-          const list = await this.orderServiceService.listOS({ limit: 100 });
-          total = list.reduce((acc, os) => acc + Number(os.total_amount ?? 0), 0);
-          osCount = list.length;
-          title = '*Saldo total*';
-          break;
-        }
-      }
-
-      const valorFormatado = total.toFixed(2).replace('.', ',');
-      let message = `${title}\n`;
-      message += `R$ ${valorFormatado}\n`;
-      message += `${osCount} OS`;
-
-      await this.sendMessage(from, message);
-    } catch (error) {
-      console.error('Erro ao consultar saldo:', error);
-      await this.sendMessage(from, 'Erro ao consultar saldo. Tenta de novo?');
-    }
-  }
-
-  /**
-   * Mostra ajuda
-   */
-  private async handleHelp(from: string): Promise<void> {
-    const message = 'Posso te ajudar com:\n\n' +
-      '• Criar OS (me envia os dados)\n' +
-      '• Listar OS (hoje, mês ou últimas)\n' +
-      '• Ver status de OS específica\n' +
-      '• Consultar saldo\n\n' +
-      'O que precisa?';
+  private async sendTypingIndicator(_remoteJid: string, _isTyping: boolean): Promise<void> {
+    // ⚠️ Funcionalidade desabilitada: endpoint setPresence não disponível na Evolution API
+    // O indicador "digitando..." não é crítico para o funcionamento
+    return;
     
-    await this.sendMessage(from, message);
+    // 🔒 SEGURANÇA: Valida número antes de enviar presença
+    // const phoneNumber = this.extractPhoneNumber(remoteJid);
+    // const NUMERO_AUTORIZADO = '5522992531720';
+    // 
+    // if (phoneNumber !== NUMERO_AUTORIZADO) {
+    //   return; // Silenciosamente ignora
+    // }
+    // 
+    // try {
+    //   await this.evolutionService.setPresence({
+    //     number: remoteJid,
+    //     presence: isTyping ? 'composing' : 'available'
+    //   });
+    // } catch (error) {
+    //   // Ignora erros de presença
+    //   console.log('[WhatsAppHandler] Erro ao definir presença (ignorado)');
+    // }
   }
 
   /**
-   * Envia mensagem via Evolution API
+   * Extrai número de telefone do JID
    */
-  private async sendMessage(to: string, message: string): Promise<void> {
-    try {
-      console.log(`Enviando mensagem para ${to}:`, message.substring(0, 120));
-      const result = await this.evolutionService.sendTextMessage(to, message);
-      console.log('Mensagem enviada com sucesso:', {
-        status: result?.status,
-        messageId: result?.message?.id,
-        to
-      });
-    } catch (error) {
-      console.error('Erro ao enviar mensagem:', error);
-    }
-  }
-  private saveUserMessage(from: string, text: string): void {
-    const history = this.conversationHistory.get(from) || {};
-    history.lastUserMessage = text;
-    this.conversationHistory.set(from, history);
+  private extractPhoneNumber(remoteJid: string): string {
+    return remoteJid.split('@')[0];
   }
 
-  private saveBotMessage(from: string, text: string): void {
-    const history = this.conversationHistory.get(from) || {};
-    history.lastBotMessage = text;
-    this.conversationHistory.set(from, history);
+  /**
+   * Processa atualização de status de conexão
+   */
+  async handleConnectionUpdate(data: any): Promise<void> {
+    console.log('[WhatsAppHandler] Atualização de conexão:', data);
   }
 
-  private async respondWithAI(from: string, context: string, data: any, fallback: string): Promise<void> {
-    try {
-      const history = this.conversationHistory.get(from);
-      const enrichedContext = history?.lastUserMessage
-        ? `${context}\nÚltima mensagem do usuário: "${history.lastUserMessage}"`
-        : context;
-      const response = await this.geminiService.generateResponse(enrichedContext, data);
-      const message = response?.trim() || fallback;
-      await this.sendMessage(from, message);
-      this.saveBotMessage(from, message);
-    } catch (error) {
-      console.error('Erro ao gerar resposta conversacional:', error);
-      await this.sendMessage(from, fallback);
-      this.saveBotMessage(from, fallback);
-    }
-  }
-
-
-  private async handleAudioMessage(from: string, audioMessage: any, originalMessage: EvolutionMessage): Promise<void> {
-    try {
-      await this.sendMessage(from, 'Processando áudio...');
-
-      const mediaResponse = await this.evolutionService.downloadMedia(audioMessage, originalMessage?.key?.id || '');
-      const { base64Data, mimeType } = this.extractAudioData(mediaResponse, audioMessage?.mimetype);
-
-      if (!base64Data) {
-        await this.sendMessage(from, 'Não consegui processar o áudio. Pode enviar em texto?');
-        return;
-      }
-
-      const transcription = await this.geminiService.transcribeAudio(base64Data, mimeType || 'audio/ogg');
-
-      if (!transcription || transcription.trim().length === 0) {
-        await this.sendMessage(from, 'Não entendi o áudio. Pode enviar em texto?');
-        return;
-      }
-
-      console.log('Transcrição de áudio obtida:', transcription);
-      await this.processUserMessage(from, transcription);
-    } catch (error) {
-      console.error('Erro ao processar áudio:', error);
-      await this.sendMessage(from, 'Erro ao processar áudio. Envia em texto?');
-    }
-  }
-
-  private extractAudioData(mediaResponse: any, fallbackMimeType?: string): { base64Data?: string; mimeType?: string } {
-    if (!mediaResponse) {
-      return {};
-    }
-
-    if (typeof mediaResponse === 'string') {
-      return { base64Data: this.stripBase64Prefix(mediaResponse), mimeType: fallbackMimeType };
-    }
-
-    if (typeof mediaResponse.base64 === 'string') {
-      return {
-        base64Data: this.stripBase64Prefix(mediaResponse.base64),
-        mimeType: mediaResponse.mimeType || fallbackMimeType
-      };
-    }
-
-    if (typeof mediaResponse.data === 'string') {
-      return {
-        base64Data: this.stripBase64Prefix(mediaResponse.data),
-        mimeType: mediaResponse.mimeType || fallbackMimeType
-      };
-    }
-
-    if (mediaResponse.data && Array.isArray(mediaResponse.data)) {
-      return {
-        base64Data: Buffer.from(mediaResponse.data).toString('base64'),
-        mimeType: mediaResponse.mimeType || fallbackMimeType
-      };
-    }
-
-    if (mediaResponse.data && mediaResponse.data.type === 'Buffer' && Array.isArray(mediaResponse.data.data)) {
-      return {
-        base64Data: Buffer.from(mediaResponse.data.data).toString('base64'),
-        mimeType: mediaResponse.mimeType || fallbackMimeType
-      };
-    }
-
-    if (Buffer.isBuffer(mediaResponse)) {
-      return { base64Data: mediaResponse.toString('base64'), mimeType: fallbackMimeType };
-    }
-
-    return {};
-  }
-
-  private stripBase64Prefix(data: string): string {
-    const commaIndex = data.indexOf(',');
-    return commaIndex >= 0 ? data.slice(commaIndex + 1) : data;
-  }
-
-  private normalizeListRange(range?: GeminiListRange | string): GeminiListRange {
-    if (!range) {
-      return 'latest';
-    }
-
-    switch (range) {
-      case 'day':
-        return 'day';
-      case 'month':
-        return 'month';
-      default:
-        return 'latest';
-    }
-  }
-
-  private normalizeBalancePeriod(period?: GeminiBalancePeriod | string): GeminiBalancePeriod {
-    if (!period) {
-      return 'overall';
-    }
-
-    if (period === 'day') {
-      return 'day';
-    }
-
-    if (period === 'month') {
-      return 'month';
-    }
-
-    return 'overall';
+  /**
+   * Limpa histórico de conversa de um usuário
+   */
+  clearUserHistory(userPhone: string, chatId: string): void {
+    this.orchestrator.clearConversationHistory(userPhone, chatId);
   }
 }
 
