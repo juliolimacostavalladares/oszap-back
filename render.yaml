@@ -16,11 +16,11 @@ services:
       - key: BASE_URL
         sync: false
       - key: EVOLUTION_API_URL
-        value: https://whats.oszap.com.br
+        sync: false
       - key: EVOLUTION_API_KEY
-        value: 9538FAD36557-4FA1-8556-882F0D2AB94E
+        sync: false
       - key: INSTANCE_NAME
-        value: OSZap
+        sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL
