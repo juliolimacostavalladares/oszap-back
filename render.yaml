@@ -1,0 +1,54 @@
+services:
+  # Backend Node.js - API OSZap
+  - type: web
+    name: oszap-backend
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: BASE_URL
+        sync: false
+      - key: EVOLUTION_API_URL
+        value: https://whats.oszap.com.br
+      - key: EVOLUTION_API_KEY
+        value: 9538FAD36557-4FA1-8556-882F0D2AB94E
+      - key: INSTANCE_NAME
+        value: OSZap
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4-turbo-preview
+      - key: OPENAI_MAX_TOKENS
+        value: 1000
+      - key: OPENAI_TEMPERATURE
+        value: 0.7
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: ASSISTANT_NAME
+        value: Assistente Virtual OSZap
+      - key: MESSAGE_TIMEOUT
+        value: 30
+      - key: MAX_MESSAGE_AGE_MINUTES
+        value: 5
+      - key: ENABLE_AUDIO_PROCESSING
+        value: true
+      - key: ENABLE_IMAGE_PROCESSING
+        value: true
+      - key: ENABLE_GROUP_MESSAGES
+        value: false
+      - key: MAX_MESSAGES_PER_MINUTE
+        value: 10
+      - key: MESSAGE_COOLDOWN_MS
+        value: 1000
+
