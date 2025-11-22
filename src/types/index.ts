@@ -15,43 +15,58 @@ export interface Usuario {
 
 export interface OrdemServico {
   id: number;
-  numero_os: string;
-  usuario_id: string;
+  numero_os?: string;
+  usuario_id?: string;
   
-  // Cliente
-  cliente_nome: string;
+  // Cliente (PT-BR)
+  cliente_nome?: string;
   cliente_telefone?: string;
   cliente_email?: string;
   cliente_endereco?: string;
   
+  // Cliente (EN) - para compatibilidade
+  client_name?: string;
+  client_phone?: string;
+  client_email?: string;
+  client_address?: string;
+  
   // Serviço
-  titulo: string;
-  descricao: string;
+  titulo?: string;
+  descricao?: string;
   categoria?: string;
-  prioridade: 'baixa' | 'normal' | 'alta' | 'urgente';
+  prioridade?: 'baixa' | 'normal' | 'alta' | 'urgente';
   
   // Status
-  status: 'aberta' | 'em_andamento' | 'aguardando_pecas' | 'concluida' | 'cancelada';
+  status?: 'aberta' | 'em_andamento' | 'aguardando_pecas' | 'concluida' | 'cancelada';
   tecnico_responsavel?: string;
   
-  // Valores
+  // Valores (PT-BR)
   valor_estimado?: number;
   valor_final?: number;
   valor_pecas?: number;
   valor_mao_obra?: number;
   
-  // Datas
-  data_abertura: string;
+  // Valores (EN) - para compatibilidade
+  total_amount?: number;
+  
+  // Datas (PT-BR)
+  data_abertura?: string;
   data_previsao?: string;
   data_conclusao?: string;
+  criado_em?: string;
+  atualizado_em?: string;
+  
+  // Datas (EN) - para compatibilidade
+  created_at?: string;
+  updated_at?: string;
   
   // Extras
   pdf_url?: string;
   observacoes?: string;
+  notes?: string; // EN
+  services?: any[]; // EN
   metadata?: Record<string, any>;
-  
-  criado_em: string;
-  atualizado_em: string;
+  [key: string]: any; // Aceitar campos dinâmicos
 }
 
 export interface PecaOS {
@@ -228,6 +243,43 @@ export interface ConnectionState {
   instance: string;
   state: 'open' | 'connecting' | 'close';
 }
+
+export interface EvolutionMessage {
+  key: {
+    remoteJid: string;
+    fromMe: boolean;
+    id: string;
+  };
+  message: any;
+  messageType: string;
+  messageTimestamp: number;
+}
+
+export interface EvolutionSendMessageResponse {
+  key: {
+    remoteJid: string;
+    fromMe: boolean;
+    id: string;
+  };
+  message: any;
+  messageTimestamp: number;
+  status: string;
+}
+
+export interface SendButtonsOptions {
+  title: string;
+  text?: string;
+  description?: string;
+  footer?: string;
+  buttons: Array<{
+    id: string;
+    text: string;
+    displayText?: string;
+  }>;
+}
+
+// Alias para compatibilidade
+export type OrderService = OrdemServico;
 
 // =====================================================
 // TIPOS PARA OPENAI
